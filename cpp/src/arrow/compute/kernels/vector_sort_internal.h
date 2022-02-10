@@ -590,39 +590,63 @@ class NestedValuesComparator {
         return 1;
     }
 
+    // auto GetChunkedArrayValue(ChunkedArray const& chunked_array, uint64_t idx)
+    //     -> decltype(GetView::LogicalValue(
+    //         checked_cast<const FieldArrayType&>(chunked_array.chunk(0)).GetView(0))) {
+    //   int n_chunks = chunked_array.num_chunks();
+    //   for (int i = 0; i < n_chunks; i++) {
+    //     auto chunk = chunked_array.chunk(i);
+    //     if (idx < static_cast<uint64_t>(chunk->length())) {
+    //       const FieldArrayType& values = checked_cast<const FieldArrayType&>(*chunk);
+    //       return GetView::LogicalValue(values.GetView(idx));
+    //     }
+    //     idx -= chunk->length();
+    //   }
+
+    //   const FieldArrayType& values =
+    //       checked_cast<const FieldArrayType&>(*chunked_array.chunk(0));
+    //   return GetView::LogicalValue(values.GetView(idx));
+    // }
+
+    std::shared_ptr<Array> GetPhysicalArray(
+        const Array& array, const std::shared_ptr<DataType>& physical_type) {
+      auto new_data = array.data()->Copy();
+      new_data->type = physical_type;
+      return MakeArray(std::move(new_data));
+    }
+
+    ArrayVector GetPhysicalChunks(const ArrayVector& chunks,
+                                  const std::shared_ptr<DataType>& physical_type) {
+      ArrayVector physical(chunks.size());
+      std::transform(chunks.begin(), chunks.end(), physical.begin(),
+                     [&](const std::shared_ptr<Array>& array) {
+                       return GetPhysicalArray(*array, physical_type);
+                     });
+      return physical;
+    }
+
     virtual int Compare(ChunkedArray const& chunked_array, uint64_t offset,
                         uint64_t leftidx, uint64_t rightidx) {
-      using Val = decltype(GetView::LogicalValue(
-          checked_cast<const FieldArrayType&>(chunked_array.chunk(0)).GetView(0)));
-      Val l_value = 0, r_value = 0;
+      // auto l_value = GetChunkedArrayValue(chunked_array, leftidx);
+      // auto r_value = GetChunkedArrayValue(chunked_array, rightidx);
 
-      int n_chunks = chunked_array.num_chunks();
-      for (int i = 0; i < n_chunks; i++) {
-        auto chunk = chunked_array.chunk(i);
-        if (leftidx < static_cast<uint64_t>(chunk->length())) {
-          const FieldArrayType& values = checked_cast<const FieldArrayType&>(*chunk);
-          l_value = GetView::LogicalValue(values.GetView(leftidx));
-          break;
-        }
-        leftidx -= chunk->length();
-      }
+      // if (l_value == r_value)
+      //   return 0;
+      // else if (l_value < r_value)
+      //   return -1;
+      // else
+      //   return 1;
 
-      for (int i = 0; i < n_chunks; i++) {
-        auto chunk = chunked_array.chunk(i);
-        if (rightidx < static_cast<uint64_t>(chunk->length())) {
-          const FieldArrayType& values = checked_cast<const FieldArrayType&>(*chunk);
-          r_value = GetView::LogicalValue(values.GetView(rightidx));
-          break;
-        }
-        rightidx -= chunk->length();
-      }
+      ////////////////////////////////
+      const ArrayVector physical_chunks_ = GetPhysicalChunks(
+          chunked_array.chunks(), GetPhysicalType(chunked_array.type()));
+      const auto arrays = GetArrayPointers(physical_chunks_);
 
-      if (l_value == r_value)
-        return 0;
-      else if (l_value < r_value)
-        return -1;
-      else
-        return 1;
+      auto chunked_resolver = ChunkedArrayResolver(arrays);
+
+      const auto chunk_left = chunked_resolver.Resolve<FieldArrayType>(leftidx);
+      const auto chunk_right = chunked_resolver.Resolve<FieldArrayType>(rightidx);
+      return chunk_left.Value() < chunk_right.Value();
     }
 
     virtual int Compare(Array const& array, NullPlacement null_placement,
