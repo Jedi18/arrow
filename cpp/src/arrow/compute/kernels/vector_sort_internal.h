@@ -25,6 +25,7 @@
 #include "arrow/array.h"
 #include "arrow/compute/api_vector.h"
 #include "arrow/compute/kernels/chunked_internal.h"
+#include "arrow/table.h"
 #include "arrow/type.h"
 #include "arrow/type_traits.h"
 
@@ -455,6 +456,348 @@ Result<ArraySortFunc> GetArraySorter(const DataType& type);
 Status SortChunkedArray(ExecContext* ctx, uint64_t* indices_begin, uint64_t* indices_end,
                         const ChunkedArray& values, SortOrder sort_order,
                         NullPlacement null_placement);
+
+// Common Comparator for all DataStructures with NestedValues like StructArray,
+// ChunkedArray, Table and RecordBatch
+class NestedValuesComparator {
+ public:
+  // StructArray Compare overload
+  int Compare(StructArray const& array, uint64_t field_index, uint64_t offset,
+              uint64_t leftrowidx, uint64_t rightrowidx) {
+    std::shared_ptr<Array> field = array.field(static_cast<int>(field_index));
+    return comparators_[field_index]->Compare(*field, offset, leftrowidx, rightrowidx);
+  }
+
+  // StructArray Prepare overload
+  Status Prepare(StructArray const& array) {
+    auto fields = array.fields();
+    for (auto field = fields.begin(); field != fields.end(); field++) {
+      std::shared_ptr<DataType> physical_type = GetPhysicalType((*field)->type());
+      NestedComparatorFactory comparator_factory = NestedComparatorFactory();
+      std::shared_ptr<NestedValueComparator> current_field_comparator;
+      ARROW_ASSIGN_OR_RAISE(
+          current_field_comparator,
+          NestedComparatorFactory().MakeFieldComparator(*physical_type));
+      comparators_.push_back(current_field_comparator);
+    }
+    return Status::OK();
+  }
+
+  // Table Compare overload
+  int Compare(Table const& table, uint64_t field_index, uint64_t offset,
+              uint64_t leftrowidx, uint64_t rightrowidx) {
+    std::shared_ptr<ChunkedArray> field = table.column(static_cast<int>(field_index));
+    return comparators_[field_index]->Compare(*field, offset, leftrowidx, rightrowidx);
+  }
+
+  // Table Prepare overload
+  Status Prepare(Table const& array) {
+    auto fields = array.columns();
+    for (auto field = fields.begin(); field != fields.end(); field++) {
+      std::shared_ptr<DataType> physical_type = GetPhysicalType((*field)->type());
+      NestedComparatorFactory comparator_factory = NestedComparatorFactory();
+      std::shared_ptr<NestedValueComparator> current_field_comparator;
+      ARROW_ASSIGN_OR_RAISE(
+          current_field_comparator,
+          NestedComparatorFactory().MakeFieldComparator(*physical_type));
+      comparators_.push_back(current_field_comparator);
+    }
+    return Status::OK();
+  }
+
+  // RecordBatch Compare overload
+  int Compare(RecordBatch const& batch, uint64_t field_index, uint64_t offset,
+              uint64_t leftrowidx, uint64_t rightrowidx) {
+    std::shared_ptr<Array> field = batch.column(static_cast<int>(field_index));
+    return comparators_[field_index]->Compare(*field, offset, leftrowidx, rightrowidx);
+  }
+
+  // RecordBatch Compare overload
+  int Compare(RecordBatch const& batch, NullPlacement null_placement,
+              SortOrder sort_order, uint64_t field_index, uint64_t offset,
+              uint64_t leftrowidx, uint64_t rightrowidx) {
+    std::shared_ptr<Array> field = batch.column(static_cast<int>(field_index));
+    return comparators_[field_index]->Compare(*field, null_placement, sort_order, offset,
+                                              leftrowidx, rightrowidx);
+  }
+
+  // RecordBatch Prepare overload
+  Status Prepare(RecordBatch const& batch) {
+    auto fields = batch.columns();
+    for (auto field = fields.begin(); field != fields.end(); field++) {
+      std::shared_ptr<DataType> physical_type = GetPhysicalType((*field)->type());
+      NestedComparatorFactory comparator_factory = NestedComparatorFactory();
+      std::shared_ptr<NestedValueComparator> current_field_comparator;
+      ARROW_ASSIGN_OR_RAISE(
+          current_field_comparator,
+          NestedComparatorFactory().MakeFieldComparator(*physical_type));
+      comparators_.push_back(current_field_comparator);
+    }
+    return Status::OK();
+  }
+
+  // ResolvedChunk<StructArray> Prepare overload
+  Status Prepare(const ResolvedChunk<StructArray>& chunk_left,
+                 const ResolvedChunk<StructArray>&) {
+    return Prepare(*chunk_left.array);
+  }
+
+  // ResolvedChunk<StructArray> Compare overload
+  int Compare(const ResolvedChunk<StructArray>& chunk_left,
+              const ResolvedChunk<StructArray>& chunk_right, uint64_t field_index) {
+    std::shared_ptr<Array> field_left =
+        chunk_left.array->field(static_cast<int>(field_index));
+    std::shared_ptr<Array> field_right =
+        chunk_right.array->field(static_cast<int>(field_index));
+    return comparators_[field_index]->Compare(*field_left, *field_right, chunk_left.index,
+                                              chunk_right.index);
+  }
+
+ private:
+  struct NestedValueComparator {
+    virtual int Compare(Array const& array, uint64_t offset, uint64_t leftidx,
+                        uint64_t rightidx) = 0;
+
+    virtual int Compare(Array const& left_array, Array const& right_array,
+                        uint64_t leftidx, uint64_t rightidx) = 0;
+
+    virtual int Compare(ChunkedArray const& array, uint64_t offset, uint64_t leftidx,
+                        uint64_t rightidx) = 0;
+
+    virtual int Compare(Array const& array, NullPlacement null_placement,
+                        SortOrder sort_order, uint64_t offset, uint64_t leftidx,
+                        uint64_t rightidx) = 0;
+
+    virtual ~NestedValueComparator() = default;
+  };
+
+  template <typename Type>
+  struct ConcreteNestedValueComparator : NestedValueComparator {
+    using FieldArrayType = typename TypeTraits<Type>::ArrayType;
+    using GetView = GetViewType<Type>;
+
+    virtual int Compare(Array const& array, uint64_t offset, uint64_t leftidx,
+                        uint64_t rightidx) {
+      const FieldArrayType& values = checked_cast<const FieldArrayType&>(array);
+      auto left_value = GetView::LogicalValue(values.GetView(leftidx - offset));
+      auto right_value = GetView::LogicalValue(values.GetView(rightidx - offset));
+      if (left_value == right_value)
+        return 0;
+      else if (left_value < right_value)
+        return -1;
+      else
+        return 1;
+    }
+
+    virtual int Compare(ChunkedArray const& chunked_array, uint64_t offset,
+                        uint64_t leftidx, uint64_t rightidx) {
+      using Val = decltype(GetView::LogicalValue(
+          checked_cast<const FieldArrayType&>(chunked_array.chunk(0)).GetView(0)));
+      Val l_value = 0, r_value = 0;
+
+      int n_chunks = chunked_array.num_chunks();
+      for (int i = 0; i < n_chunks; i++) {
+        auto chunk = chunked_array.chunk(i);
+        if (leftidx < static_cast<uint64_t>(chunk->length())) {
+          const FieldArrayType& values = checked_cast<const FieldArrayType&>(*chunk);
+          l_value = GetView::LogicalValue(values.GetView(leftidx));
+          break;
+        }
+        leftidx -= chunk->length();
+      }
+
+      for (int i = 0; i < n_chunks; i++) {
+        auto chunk = chunked_array.chunk(i);
+        if (rightidx < static_cast<uint64_t>(chunk->length())) {
+          const FieldArrayType& values = checked_cast<const FieldArrayType&>(*chunk);
+          r_value = GetView::LogicalValue(values.GetView(rightidx));
+          break;
+        }
+        rightidx -= chunk->length();
+      }
+
+      if (l_value == r_value)
+        return 0;
+      else if (l_value < r_value)
+        return -1;
+      else
+        return 1;
+    }
+
+    virtual int Compare(Array const& array, NullPlacement null_placement,
+                        SortOrder sort_order, uint64_t offset, uint64_t leftidx,
+                        uint64_t rightidx) {
+      // Null values
+      if (array.null_count() > 0) {
+        const bool is_null_left = array.IsNull(leftidx);
+        const bool is_null_right = array.IsNull(rightidx);
+        if (is_null_left && is_null_right) {
+          return 0;
+        } else if (is_null_left) {
+          return null_placement == NullPlacement::AtStart ? -1 : 1;
+        } else if (is_null_right) {
+          return null_placement == NullPlacement::AtStart ? 1 : -1;
+        }
+      }
+
+      const FieldArrayType& values = checked_cast<const FieldArrayType&>(array);
+      auto left_value = GetView::LogicalValue(values.GetView(leftidx - offset));
+      auto right_value = GetView::LogicalValue(values.GetView(rightidx - offset));
+
+      // Supports NaN values
+      return CompareTypeValues<Type>(left_value, right_value, sort_order, null_placement);
+    }
+
+    virtual int Compare(Array const& left_array, Array const& right_array,
+                        uint64_t leftidx, uint64_t rightidx) {
+      const FieldArrayType& left_values = checked_cast<const FieldArrayType&>(left_array);
+      const FieldArrayType& right_values =
+          checked_cast<const FieldArrayType&>(right_array);
+      auto left_value = GetView::LogicalValue(left_values.GetView(leftidx));
+      auto right_value = GetView::LogicalValue(right_values.GetView(rightidx));
+
+      if (left_value == right_value)
+        return 0;
+      else if (left_value < right_value)
+        return -1;
+      else
+        return 1;
+    }
+  };
+
+  struct ConcreteNullNestedValueComparator : NestedValueComparator {
+    virtual int Compare(Array const& array, uint64_t offset, uint64_t leftidx,
+                        uint64_t rightidx) {
+      return 0;
+    }
+
+    virtual int Compare(Array const& array, NullPlacement null_placement,
+                        SortOrder sort_order, uint64_t offset, uint64_t leftidx,
+                        uint64_t rightidx) {
+      return 0;
+    }
+
+    virtual int Compare(Array const& left_array, Array const& right_array,
+                        uint64_t leftidx, uint64_t rightidx) {
+      return 0;
+    }
+
+    virtual int Compare(ChunkedArray const& chunked_array, uint64_t offset,
+                        uint64_t leftidx, uint64_t rightidx) {
+      return 0;
+    }
+  };
+
+  /**
+   * Internal use factory whose purpose is to detect the right type
+   * of comparator that should be built to be able to compare two
+   * nested values in the same field or column
+   */
+  struct NestedComparatorFactory {
+    Result<std::shared_ptr<NestedValueComparator>> MakeFieldComparator(
+        DataType const& physical_type) {
+      RETURN_NOT_OK(VisitTypeInline(physical_type, this));
+      DCHECK_NE(current_field_comparator_, nullptr);
+      return std::move(current_field_comparator_);
+    }
+
+#define VISIT(TYPE) \
+  Status Visit(const TYPE& type) { return VisitGeneric(type); }
+
+    VISIT_SORTABLE_PHYSICAL_TYPES(VISIT)
+#undef VISIT
+
+    Status Visit(const DataType& type) {
+      return Status::TypeError("Unsupported type for NestedComparatorFactory: ",
+                               type.ToString());
+    }
+
+    template <typename Type>
+    Status VisitGeneric(const Type&) {
+      current_field_comparator_ = std::shared_ptr<NestedValueComparator>(
+          new ConcreteNestedValueComparator<Type>());
+      return Status::OK();
+    }
+
+    Status Visit(const NullType&) {
+      current_field_comparator_ =
+          std::shared_ptr<NestedValueComparator>(new ConcreteNullNestedValueComparator());
+      return Status::OK();
+    }
+
+    Status Visit(const Date32Type&) {
+      current_field_comparator_ = std::shared_ptr<NestedValueComparator>(
+          new ConcreteNestedValueComparator<Date32Type>());
+      return Status::OK();
+    }
+
+    Status Visit(const Date64Type&) {
+      current_field_comparator_ = std::shared_ptr<NestedValueComparator>(
+          new ConcreteNestedValueComparator<Date64Type>());
+      return Status::OK();
+    }
+
+    Status Visit(const Time32Type&) {
+      current_field_comparator_ = std::shared_ptr<NestedValueComparator>(
+          new ConcreteNestedValueComparator<Time32Type>());
+      return Status::OK();
+    }
+
+    Status Visit(const Time64Type&) {
+      current_field_comparator_ = std::shared_ptr<NestedValueComparator>(
+          new ConcreteNestedValueComparator<Time64Type>());
+      return Status::OK();
+    }
+
+    Status Visit(const TimestampType&) {
+      current_field_comparator_ = std::shared_ptr<NestedValueComparator>(
+          new ConcreteNestedValueComparator<TimestampType>());
+      return Status::OK();
+    }
+
+    std::shared_ptr<NestedValueComparator> current_field_comparator_;
+  };
+
+  std::vector<std::shared_ptr<NestedValueComparator>> comparators_;
+};
+
+
+template <typename ArrayType>
+struct ResolvedChunkComparator {
+  bool Compare(const ChunkedArrayResolver& chunk_resolver, uint64_t left,
+               uint64_t right) {
+    const auto chunk_left = chunk_resolver.Resolve<ArrayType>(left);
+    const auto chunk_right = chunk_resolver.Resolve<ArrayType>(right);
+    return chunk_left.Value() < chunk_right.Value();
+  }
+};
+
+template <>
+struct ResolvedChunkComparator<StructArray> {
+  bool Compare(const ChunkedArrayResolver& chunk_resolver, uint64_t left,
+               uint64_t right) {
+    const auto chunk_left = chunk_resolver.Resolve<StructArray>(left);
+    const auto chunk_right = chunk_resolver.Resolve<StructArray>(right);
+    NestedValuesComparator nested_values_comparator;
+    auto status = nested_values_comparator.Prepare(chunk_left, chunk_right);
+
+    if (!status.ok()) {
+      return false;
+    }
+
+    for (int i = 0; i < chunk_left.array->num_fields(); i++) {
+      int val = nested_values_comparator.Compare(chunk_left, chunk_right, i);
+
+      if (val == 0) {
+        continue;
+      }
+
+      return val == -1;
+    }
+
+    return false;
+  }
+};
 
 }  // namespace internal
 }  // namespace compute
