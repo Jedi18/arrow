@@ -479,6 +479,21 @@ def test_array_slice_negative_step():
         assert result.equals(expected)
 
 
+def test_array_sort():
+    arr = pa.array([5, 7, 35], type=pa.int64())
+    sorted_arr = arr.sort("descending")
+    assert sorted_arr.to_pylist() == [35, 7, 5]
+
+    arr = pa.array([5, 35, 7], type=pa.int64())
+    # ascending sort by default
+    sorted_arr = arr.sort()
+    assert sorted_arr.to_pylist() == [5, 7, 35]
+
+    #arr = pa.chunked_array([[1, 2, 3], [4, 5, 6]])
+    #sorted_arr = arr.sort("descending")
+    #assert sorted_arr.to_pylist() == [6, 5, 4, 3, 2, 1]
+
+
 def test_array_diff():
     # ARROW-6252
     arr1 = pa.array(['foo'], type=pa.utf8())
@@ -514,6 +529,37 @@ def test_struct_array_slice():
     arr = pa.array([(1, 2.5), (3, 4.5), (5, 6.5)], type=ty)
     assert arr[1:].to_pylist() == [{'a': 3, 'b': 4.5},
                                    {'a': 5, 'b': 6.5}]
+
+
+def test_struct_array_sort():
+    arr = pa.StructArray.from_arrays([
+        pa.array([5, 7, 7, 35], type=pa.int64()),
+        pa.array(["foo", "car", "bar", "foobar"])
+    ], names=["a", "b"])
+
+    sorted_arr = arr.sort("descending", fieldname="a")
+    assert sorted_arr.to_pylist() == [
+        {"a": 35, "b": "foobar"},
+        {"a": 7, "b": "car"},
+        {"a": 7, "b": "bar"},
+        {"a": 5, "b": "foo"},
+    ]
+
+    sorted_arr = arr.sort("descending")
+    assert sorted_arr.to_pylist() == [
+        {"a": 35, "b": "foobar"},
+        {"a": 7, "b": "car"},
+        {"a": 7, "b": "bar"},
+        {"a": 5, "b": "foo"},
+    ]
+
+    sorted_arr = arr.sort("ascending")
+    assert sorted_arr.to_pylist() == [
+        {"a": 5, "b": "foo"},
+        {"a": 7, "b": "bar"},
+        {"a": 7, "b": "car"},
+        {"a": 35, "b": "foobar"},
+    ]
 
 
 def test_array_factory_invalid_type():
