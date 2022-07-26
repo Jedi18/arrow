@@ -481,6 +481,215 @@ def test_chunked_array_unify_dictionaries():
     assert arr.to_pylist() == ["foo", "bar", None, "foo", "quux", None, "foo"]
 
 
+def test_struct_chunked_array_sort():
+    arr1 = pa.StructArray.from_arrays([
+        pa.array([5, 7, 8], type=pa.int64()),
+        pa.array(["foo", "car", "far"])
+    ], names=["a", "b"])
+
+    arr2 = pa.StructArray.from_arrays([
+        pa.array([7, 35, 9], type=pa.int64()),
+        pa.array(["bar", "foobar", "tar"])
+    ], names=["a", "b"])
+
+    chunked_arr = pa.chunked_array([arr1, arr2])
+
+    sorted_arr = chunked_arr.sort("descending")
+    assert sorted_arr.to_pylist() == [
+        {"a": 35, "b": "foobar"},
+        {"a": 9, "b": "tar"},
+        {"a": 8, "b": "far"},
+        {"a": 7, "b": "car"},
+        {"a": 7, "b": "bar"},
+        {"a": 5, "b": "foo"},
+    ]
+
+    sorted_arr = chunked_arr.sort("ascending")
+    assert sorted_arr.to_pylist() == [
+        {"a": 5, "b": "foo"},
+        {"a": 7, "b": "bar"},
+        {"a": 7, "b": "car"},
+        {"a": 8, "b": "far"},
+        {"a": 9, "b": "tar"},
+        {"a": 35, "b": "foobar"},
+    ]
+
+    arr1 = pa.StructArray.from_arrays([
+        pa.array(["foo", "car", "tar"]),
+        pa.array([5, 7, 8], type=pa.int64())
+    ], names=["a", "b"])
+
+    arr2 = pa.StructArray.from_arrays([
+        pa.array(["bar", "foobar", "far"]),
+        pa.array([7, 35, 9], type=pa.int64())
+    ], names=["a", "b"])
+
+    chunked_arr = pa.chunked_array([arr1, arr2])
+
+    sorted_arr = chunked_arr.sort("ascending")
+    assert sorted_arr.to_pylist() == [
+        {"a": "bar", "b": 7},
+        {"a": "car", "b": 7},
+        {"a": "far", "b": 9},
+        {"a": "foo", "b": 5},
+        {"a": "foobar", "b": 35},
+        {"a": "tar", "b": 8},
+    ]
+
+    sorted_arr = chunked_arr.sort("descending")
+    assert sorted_arr.to_pylist() == [
+        {"a": "tar", "b": 8},
+        {"a": "foobar", "b": 35},
+        {"a": "foo", "b": 5},
+        {"a": "far", "b": 9},
+        {"a": "car", "b": 7},
+        {"a": "bar", "b": 7},
+    ]
+
+    arr1 = pa.StructArray.from_arrays([
+        pa.array([5, 5, 5], type=pa.int64()),
+        pa.array([3, 2, 2], type=pa.int64()),
+        pa.array(["foo", "car", "tar"])
+    ], names=["a", "b", "c"])
+
+    arr2 = pa.StructArray.from_arrays([
+        pa.array([5, 5, 2], type=pa.int64()),
+        pa.array([2, 8, 3], type=pa.int64()),
+        pa.array(["bar", "foobar", "far"])
+    ], names=["a", "b", "c"])
+
+    arr3 = pa.StructArray.from_arrays([
+        pa.array([5, 5, 2], type=pa.int64()),
+        pa.array([2, 8, 1], type=pa.int64()),
+        pa.array(["cat", "dog", "mouse"])
+    ], names=["a", "b", "c"])
+
+    chunked_arr = pa.chunked_array([arr1, arr2, arr3])
+
+    sorted_arr = chunked_arr.sort("ascending")
+    assert sorted_arr.to_pylist() == [
+        {"a": 2, "b": 1, "c": "mouse"},
+        {"a": 2, "b": 3, "c": "far"},
+        {"a": 5, "b": 2, "c": "bar"},
+        {"a": 5, "b": 2, "c": "car"},
+        {"a": 5, "b": 2, "c": "cat"},
+        {"a": 5, "b": 2, "c": "tar"},
+        {"a": 5, "b": 3, "c": "foo"},
+        {"a": 5, "b": 8, "c": "dog"},
+        {"a": 5, "b": 8, "c": "foobar"}
+    ]
+
+    sorted_arr = chunked_arr.sort("descending")
+    assert sorted_arr.to_pylist() == [
+        {"a": 5, "b": 8, "c": "foobar"},
+        {"a": 5, "b": 8, "c": "dog"},
+        {"a": 5, "b": 3, "c": "foo"},
+        {"a": 5, "b": 2, "c": "tar"},
+        {"a": 5, "b": 2, "c": "cat"},
+        {"a": 5, "b": 2, "c": "car"},
+        {"a": 5, "b": 2, "c": "bar"},
+        {"a": 2, "b": 3, "c": "far"},
+        {"a": 2, "b": 1, "c": "mouse"}
+    ]
+
+
+def test_record_batch_sort():
+    rb = pa.RecordBatch.from_arrays([
+        pa.array([7, 35, 7, 5], type=pa.int64()),
+        pa.array([4, 1, 3, 2], type=pa.int64()),
+        pa.array(["foo", "car", "bar", "foobar"])
+    ], names=["a", "b", "c"])
+
+    sorted_rb = rb.sort_by([("a", "descending"), ("b", "descending")])
+    sorted_rb_dict = sorted_rb.to_pydict()
+    assert sorted_rb_dict["a"] == [35, 7, 7, 5]
+    assert sorted_rb_dict["b"] == [1, 4, 3, 2]
+    assert sorted_rb_dict["c"] == ["car", "foo", "bar", "foobar"]
+
+    sorted_rb = rb.sort_by([("a", "ascending"), ("b", "ascending")])
+    sorted_rb_dict = sorted_rb.to_pydict()
+    assert sorted_rb_dict["a"] == [5, 7, 7, 35]
+    assert sorted_rb_dict["b"] == [2, 3, 4, 1]
+    assert sorted_rb_dict["c"] == ["foobar", "bar", "foo", "car"]
+
+    # test multi-key record batch sorter (> 8 sort keys)
+    rb1_names = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
+    rb1 = pa.RecordBatch.from_arrays([
+        pa.array([4, 4, 4, 4], type=pa.int64()),
+        pa.array([4, 4, 4, 4], type=pa.int64()),
+        pa.array([4, 4, 4, 4], type=pa.int64()),
+        pa.array([4, 4, 2, 2], type=pa.int64()),
+        pa.array([4, 4, 2, 2], type=pa.int64()),
+        pa.array([4, 4, 2, 2], type=pa.int64()),
+        pa.array([4, 4, 2, 2], type=pa.int64()),
+        pa.array([4, 4, 2, 2], type=pa.int64()),
+        pa.array([2, 1, 4, 3], type=pa.int64()),
+        pa.array(["foo", "car", "bar", "foobar"])
+    ], names=rb1_names)
+
+    sort_keys_list = [(name, "ascending") for name in rb1_names]
+
+    sorted_rb1 = rb1.sort_by(sort_keys_list)
+    sorted_rb1_dict = sorted_rb1.to_pydict()
+    assert sorted_rb1_dict["a"] == [4, 4, 4, 4]
+    assert sorted_rb1_dict["b"] == [4, 4, 4, 4]
+    assert sorted_rb1_dict["c"] == [4, 4, 4, 4]
+    assert sorted_rb1_dict["d"] == [2, 2, 4, 4]
+    assert sorted_rb1_dict["e"] == [2, 2, 4, 4]
+    assert sorted_rb1_dict["f"] == [2, 2, 4, 4]
+    assert sorted_rb1_dict["g"] == [2, 2, 4, 4]
+    assert sorted_rb1_dict["h"] == [2, 2, 4, 4]
+    assert sorted_rb1_dict["i"] == [3, 4, 1, 2]
+    assert sorted_rb1_dict["j"] == ["foobar", "bar", "car", "foo"]
+
+    # test radix sort with nulls
+    rb2_names = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
+    rb2 = pa.RecordBatch.from_arrays([
+        pa.array([None, None, None, None]),
+        pa.array([4, 4, 4, 4], type=pa.int64()),
+        pa.array([4, 4, 4, 4], type=pa.int64()),
+        pa.array([4, 4, 2, 2], type=pa.int64()),
+        pa.array([4, 4, 2, 2], type=pa.int64()),
+        pa.array([4, 4, 2, 2], type=pa.int64()),
+        pa.array([4, 4, 2, 2], type=pa.int64()),
+        pa.array([4, 4, 2, 2], type=pa.int64()),
+        pa.array([2, 1, 4, 3], type=pa.int64()),
+        pa.array([2, 1, 4, 3], type=pa.int64()),
+    ], names=rb2_names)
+
+    sort_keys_list = [("a", "ascending"), ("j", "ascending")]
+    sorted_rb2 = rb2.sort_by(sort_keys_list)
+    sorted_rb2_dict = sorted_rb2.to_pydict()
+
+    assert sorted_rb2_dict["a"] == [None, None, None, None]
+    assert sorted_rb2_dict["b"] == [4, 4, 4, 4]
+    assert sorted_rb2_dict["c"] == [4, 4, 4, 4]
+    assert sorted_rb2_dict["d"] == [4, 4, 2, 2]
+    assert sorted_rb2_dict["e"] == [4, 4, 2, 2]
+    assert sorted_rb2_dict["f"] == [4, 4, 2, 2]
+    assert sorted_rb2_dict["g"] == [4, 4, 2, 2]
+    assert sorted_rb2_dict["h"] == [4, 4, 2, 2]
+    assert sorted_rb2_dict["i"] == [1, 2, 3, 4]
+    assert sorted_rb2_dict["j"] == [1, 2, 3, 4]
+
+
+def test_table_sort():
+    tab = pa.Table.from_arrays([
+        pa.array([5, 7, 7, 35], type=pa.int64()),
+        pa.array(["foo", "car", "bar", "foobar"])
+    ], names=["a", "b"])
+
+    sorted_tab = tab.sort_by([("a", "descending")])
+    sorted_tab_dict = sorted_tab.to_pydict()
+    assert sorted_tab_dict["a"] == [35, 7, 7, 5]
+    assert sorted_tab_dict["b"] == ["foobar", "car", "bar", "foo"]
+
+    sorted_tab = tab.sort_by([("a", "ascending")])
+    sorted_tab_dict = sorted_tab.to_pydict()
+    assert sorted_tab_dict["a"] == [5, 7, 7, 35]
+    assert sorted_tab_dict["b"] == ["foo", "car", "bar", "foobar"]
+
+
 def test_recordbatch_basics():
     data = [
         pa.array(range(5), type='int16'),
