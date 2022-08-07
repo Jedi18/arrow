@@ -592,6 +592,53 @@ def test_struct_chunked_array_sort():
         {"a": 2, "b": 1, "c": "mouse"}
     ]
 
+    # test sort by struct array
+    arr1 = pa.StructArray.from_arrays([
+        pa.array([7, 4, 6], type=pa.int64()),
+        pa.array([3, 2, 2], type=pa.int64()),
+        pa.array(["foo", "car", "tar"])
+    ], names=["a", "b", "c"])
+
+    arr2 = pa.StructArray.from_arrays([
+        pa.array([3, 9, 2], type=pa.int64()),
+        pa.array([2, 8, 3], type=pa.int64()),
+        pa.array(["bar", "foobar", "far"])
+    ], names=["a", "b", "c"])
+
+    arr3 = pa.StructArray.from_arrays([
+        pa.array([5, 8, 1], type=pa.int64()),
+        pa.array([2, 8, 1], type=pa.int64()),
+        pa.array(["cat", "dog", "mouse"])
+    ], names=["a", "b", "c"])
+
+    chunked_arr = pa.chunked_array([arr1, arr2, arr3])
+
+    sorted_arr = chunked_arr.structarray_sort("b")
+    assert sorted_arr.to_pylist() == [
+        {"a": 1, "b": 1, "c": "mouse"},
+        {"a": 2, "b": 3, "c": "far"},
+        {"a": 3, "b": 2, "c": "bar"},
+        {"a": 4, "b": 2, "c": "car"},
+        {"a": 5, "b": 2, "c": "cat"},
+        {"a": 6, "b": 2, "c": "tar"},
+        {"a": 7, "b": 3, "c": "foo"},
+        {"a": 8, "b": 8, "c": "dog"},
+        {"a": 9, "b": 8, "c": "foobar"}
+    ]
+
+    sorted_arr = chunked_arr.structarray_sort("b", "descending")
+    assert sorted_arr.to_pylist() == [
+        {"a": 9, "b": 8, "c": "foobar"},
+        {"a": 8, "b": 8, "c": "dog"},
+        {"a": 7, "b": 3, "c": "foo"},
+        {"a": 6, "b": 2, "c": "tar"},
+        {"a": 5, "b": 2, "c": "cat"},
+        {"a": 4, "b": 2, "c": "car"},
+        {"a": 3, "b": 2, "c": "bar"},
+        {"a": 2, "b": 3, "c": "far"},
+        {"a": 1, "b": 1, "c": "mouse"}
+    ]
+
 
 def test_record_batch_sort():
     rb = pa.RecordBatch.from_arrays([

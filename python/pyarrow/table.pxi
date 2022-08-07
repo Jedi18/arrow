@@ -1049,7 +1049,26 @@ cdef class ChunkedArray(_PandasConvertible):
         -------
         result : ChunkedArray
         """
-        indices = _pc().sort_indices(self, sort_keys=[("", order)])
+        indices = _pc().sort_indices(self, sort_keys=[("dummy", order)])
+        return self.take(indices)
+
+    def structarray_sort(self, fieldname, order="ascending"):
+        """
+        Sort the ChunkedArray of Structs
+
+        Parameters
+        ----------
+        order : "ascending" or "descending"
+            The order of the sorting.
+        fieldname : str
+            If to sort the chunkedarray by one of the fields
+            of the struct array
+
+        Returns
+        -------
+        result : ChunkedArray
+        """
+        indices = _pc().sort_indices(self, sort_keys=[(fieldname, order)])
         return self.take(indices)
 
     def unify_dictionaries(self, MemoryPool memory_pool=None):
